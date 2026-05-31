@@ -1,5 +1,5 @@
-/// JSON pretty-printing for JSONL content.
-/// Falls back to raw string if parsing fails — never panics.
+//! JSON pretty-printing for JSONL content.
+//! Falls back to raw string if parsing fails — never panics.
 
 /// Pretty-print a single JSON line. Returns raw input on parse failure.
 pub fn json(raw: &str) -> String {

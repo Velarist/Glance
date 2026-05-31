@@ -1,6 +1,6 @@
-/// Standalone streaming operations — no index required.
-/// Used by the RPC server after releasing the file store lock,
-/// to avoid holding the lock during long disk I/O.
+//! Standalone streaming operations — no index required.
+//! Used by the RPC server after releasing the file store lock,
+//! to avoid holding the lock during long disk I/O.
 
 use anyhow::Result;
 use std::fs::File;
