@@ -316,15 +316,36 @@ All file content rendered in the VS Code panel is HTML-escaped before insertion 
 - **TOCTOU (cache):** A window exists between reading file metadata and loading the index cache. An attacker with local write access could replace the file in that window. Fixing this would require file locking and adds disproportionate complexity for a local tool.
 - **Stdin trust:** The daemon trusts all input from its stdin. In normal operation only the VS Code extension process writes to it. If another local process gains access to the daemon's stdin, it can open files readable by the current user.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, code conventions, and PR checklist.
+
+**Branch structure:**
+
+| Branch | Purpose |
+|---|---|
+| `main` | Stable — only receives merges from `dev` or `hotfix/*` |
+| `dev` | Active development — all new work goes here |
+| `feature/*` | Large features that need an isolated branch (e.g. `feature/jetbrains`) |
+| `hotfix/*` | Critical fixes applied directly from `main` |
+| `release/*` | Release preparation — feature freeze, bugfix only |
+
 ## Changelog
 
 ### v0.1.0
 - **Fix:** empty file incorrectly reported as 1 line — `LineIndex::build` now returns 0 lines for empty files
-- **Fix:** `Mutex` held during disk I/O replaced with `RwLock` — concurrent reads across multiple open files no longer block each other
-- **Fix:** `validate_path` moved to `src/security.rs` — all file access paths go through a single security gate
-- **Fix:** LFI via path traversal — `open` requests validated with `canonicalize` before any file access
+- **Fix:** `Mutex` held during disk I/O replaced with `RwLock` — concurrent reads no longer block each other
+- **Fix:** `validate_path` moved to `src/security.rs` — single security gate for all file access
+- **Fix:** LFI via path traversal — `open` requests validated with `canonicalize`
+- **Fix:** cache OOM — `total_lines` capped at 500M before `Vec::with_capacity`
+- **Fix:** Unicode search — byte offsets from `line_lower` no longer used on `line` directly
+- **Fix:** blocking I/O in async — `cmd_read`, `cmd_search`, `cmd_count` use `spawn_blocking`
+- **Fix:** empty query now returns a clear error instead of matching every line
+- **Fix:** request size capped at 4MB to prevent unbounded memory use
+- **Refactor:** `reader/` split into `format.rs`, `search.rs`, `stream.rs`, `pretty.rs` — one responsibility per file
 - Added `--version` flag to CLI
-- Removed unused `--transport` argument and dead `is_csv()` method
+- Added 96 integration tests across 10 suites
+- Added CI with multi-platform builds and release workflow
 
 ## Roadmap
 
