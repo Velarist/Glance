@@ -1,0 +1,10 @@
+id = "glance"
+name = "Glance"
+description = "Open and query large files (JSONL, CSV, logs 3GB+) without crashing"
+version = "0.1.0"
+schema_version = 1
+authors = []
+
+[slash_commands.glance]
+description = "Query a large file via the Glance daemon. Usage: /glance <path> [--line N] [--search query] [--count query] [--info]"
+requires_argument = true

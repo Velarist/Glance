@@ -1,0 +1,48 @@
+{
+  "name": "glance",
+  "displayName": "Glance",
+  "description": "Open large files (JSONL, CSV, logs 3GB+) without crashing",
+  "version": "0.1.0",
+  "publisher": "glance",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/glance-tool/glance"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.120.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:glance.openFile"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "glance.openFile",
+        "title": "Glance: Open Large File"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "glance.openFile",
+          "when": "resourceExtname =~ /\\.(jsonl|ndjson|csv|tsv|log)$/"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -watch -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/vscode": "^1.120.0",
+    "@vscode/vsce": "^3.9.1",
+    "typescript": "^5.9.3"
+  }
+}

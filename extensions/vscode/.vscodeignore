@@ -1,0 +1,6 @@
+src/
+tsconfig.json
+node_modules/
+.vscode/
+*.vsix
+# media/ and bin/ are intentionally included — required at runtime
