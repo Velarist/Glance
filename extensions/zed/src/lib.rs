@@ -231,7 +231,14 @@ fn format_search(path: &str, query: &str, results: &[SearchResult], truncated: b
         results.len(), query, suffix
     );
     for r in results {
-        out.push_str(&format!("{:>6}  {}\n", r.line_number + 1, r.content));
+        // Surround the matched portion with >> << markers so it stands out in plain text
+        let highlighted = format!(
+            "{}>>{}<<{}",
+            &r.content[..r.match_start],
+            &r.content[r.match_start..r.match_end],
+            &r.content[r.match_end..]
+        );
+        out.push_str(&format!("{:>6}  {}\n", r.line_number + 1, highlighted));
     }
     out.push_str("```");
     out

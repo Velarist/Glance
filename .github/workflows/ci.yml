@@ -107,9 +107,9 @@ jobs:
           key: zed-cargo-${{ hashFiles('extensions/zed/Cargo.lock') }}
           restore-keys: zed-cargo-
 
-      - name: Check (native)
+      - name: Check (native, warnings as errors)
         working-directory: extensions/zed
-        run: cargo check
+        run: cargo clippy -- -D warnings
 
       - name: Build (WASM)
         working-directory: extensions/zed

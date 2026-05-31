@@ -42,6 +42,14 @@ pub fn load(source_path: &str) -> Option<LineIndex> {
         return None;
     }
 
+    // Sanity cap: reject corrupt cache claiming absurd line counts.
+    // 500M lines * 8 bytes = 4GB index — already extreme for any real file.
+    const MAX_LINES: u64 = 500_000_000;
+    if total_lines > MAX_LINES {
+        tracing::warn!(total_lines, "cache rejected: line count exceeds sanity limit");
+        return None;
+    }
+
     let mut offsets = Vec::with_capacity(total_lines as usize);
     for _ in 0..total_lines {
         offsets.push(read_u64(&mut reader)?);

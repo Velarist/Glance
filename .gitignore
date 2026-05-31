@@ -10,6 +10,10 @@ extensions/vscode/*.vsix
 # Zed extension
 extensions/zed/target/
 extensions/zed/Cargo.lock
+extensions/zed/*.wasm
+
+# IDE-specific configs
+.zed/
 
 # Index cache files
 *.glance_idx

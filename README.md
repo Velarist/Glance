@@ -195,30 +195,39 @@ glance/
 ├── src/
 │   ├── main.rs              entry point, CLI (--version, --help)
 │   ├── lib.rs               module exports
-│   ├── security.rs          path validation (validate_path)
+│   ├── security.rs          path validation — all file access goes through validate_path
 │   ├── protocol/
 │   │   ├── request.rs       RPC request param types
 │   │   └── response.rs      RPC response data types
 │   ├── index/
 │   │   ├── line_index.rs    byte-offset index for O(1) line seek
-│   │   └── cache.rs         persist index to disk, reload on restart
-│   ├── reader/
-│   │   ├── mod.rs           file open, read_lines, search, search_regex, count, pretty-print
-│   │   └── csv.rs           RFC 4180 CSV/TSV line parser (quoted fields, escaped quotes)
+│   │   └── cache.rs         persist index to disk (.glance_idx), reload on restart
+│   ├── reader/              each file has one responsibility
+│   │   ├── mod.rs           FileHandle struct — open() and indexed read_lines()
+│   │   ├── format.rs        FileFormat detection — extension + first-line sniff
+│   │   ├── search.rs        search(), search_regex(), count(), count_regex()
+│   │   ├── stream.rs        read_lines_direct, stream_search/count (no-lock I/O)
+│   │   ├── pretty.rs        JSON pretty-printing with fallback
+│   │   └── csv.rs           RFC 4180 CSV/TSV parser (quoted fields, escaped quotes)
 │   └── server/
-│       └── rpc.rs           JSON-RPC 2.0 server (RwLock for concurrent reads)
+│       └── rpc.rs           JSON-RPC 2.0 server (RwLock — concurrent reads)
 ├── tests/
-│   ├── line_index_test.rs   line index — empty file, offsets, CRLF, round-trip
-│   ├── cache_test.rs        cache — save/load, invalidation, corrupt magic
-│   ├── reader_test.rs       reader — read_lines, search, regex, count, edge cases
-│   ├── csv_test.rs          CSV parser — quoting, escaping, delimiter detection
-│   └── security_test.rs     security — path traversal, symlinks, empty path
+│   ├── line_index_test.rs        line index — offsets, CRLF, empty file, round-trip
+│   ├── cache_test.rs             cache — save/load, invalidation, corrupt/truncated
+│   ├── cache_edge_cases_test.rs  cache — persistence, sanity cap, OOM protection
+│   ├── reader_test.rs            reader — read_lines, search, regex, count
+│   ├── reader_edge_cases_test.rs reader — boundaries, pretty mode, long lines
+│   ├── search_edge_cases_test.rs search — Unicode, positions, regex features
+│   ├── format_detection_test.rs  format — extension, sniff override, CSV fields
+│   ├── multi_handle_test.rs      multiple open files — independence, lifecycle
+│   ├── csv_test.rs               CSV parser — quoting, escaping, delimiter
+│   └── security_test.rs          security — traversal, symlinks, empty path
 └── extensions/
-    ├── vscode/              VS Code extension
-    │   ├── src/             TypeScript source (extension.ts, daemon.ts, panel.ts)
-    │   ├── media/           Webview assets (panel.css, panel.js)
+    ├── vscode/              VS Code extension ✓ working
+    │   ├── src/             TypeScript (extension.ts, daemon.ts, panel.ts)
+    │   ├── media/           Webview (panel.css, panel.js)
     │   └── bin/             Bundled daemon binary
-    └── zed/                 Zed extension (Rust → WASM, self-contained)
+    └── zed/                 Zed extension ⚠ experimental (WASM, slash command only)
 ```
 
 ## Testing
@@ -227,13 +236,18 @@ glance/
 cargo test
 ```
 
-42 integration tests across 5 suites. All tests use real temporary files — no mocks.
+96 integration tests across 10 suites. All tests use real temporary files — no mocks.
 
 | Suite | Tests | Coverage |
 |---|---|---|
 | `line_index_test` | 6 | empty file, byte offsets, CRLF, round-trip via `from_parts` |
 | `cache_test` | 4 | save/load, cache invalidation on file change, corrupt magic bytes |
+| `cache_edge_cases_test` | 5 | persistence, sanity cap (OOM protection), truncated cache |
 | `reader_test` | 15 | `read_lines`, `search`, `search_regex`, `count`, edge cases |
+| `reader_edge_cases_test` | 9 | boundary reads, pretty mode, very long lines |
+| `search_edge_cases_test` | 22 | match positions, Unicode, regex features, empty query |
+| `format_detection_test` | 11 | extension detection, sniff override, CSV fields |
+| `multi_handle_test` | 7 | multiple open files, independence, file size/path |
 | `csv_test` | 11 | quoting, escaped quotes, empty fields, comma/tab delimiter |
 | `security_test` | 6 | path traversal rejection, symlink resolution, empty path |
 
