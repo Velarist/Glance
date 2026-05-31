@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  # ── Build daemon binaries ──────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: glance
+            artifact: glance-linux-x86_64
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: glance
+            artifact: glance-macos-arm64
+
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary: glance
+            artifact: glance-macos-x86_64
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: glance.exe
+            artifact: glance-windows-x86_64
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.artifact }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+
+  # ── Package VSIX (Linux binary bundled) ───────────────────────────────────
+  vsix:
+    name: Package VSIX
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download Linux binary
+        uses: actions/download-artifact@v5
+        with:
+          name: glance-linux-x86_64
+          path: extensions/vscode/bin/
+
+      - name: Make binary executable
+        run: chmod +x extensions/vscode/bin/glance
+
+      - name: Install dependencies
+        working-directory: extensions/vscode
+        run: npm ci
+
+      - name: Build TypeScript
+        working-directory: extensions/vscode
+        run: npm run build
+
+      - name: Package VSIX
+        working-directory: extensions/vscode
+        run: npx vsce package --no-dependencies
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: glance-vscode
+          path: extensions/vscode/*.vsix
+
+  # ── Create GitHub Release ──────────────────────────────────────────────────
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build, vsix]
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/glance-linux-x86_64/glance
+            artifacts/glance-macos-arm64/glance
+            artifacts/glance-macos-x86_64/glance
+            artifacts/glance-windows-x86_64/glance.exe
+            artifacts/glance-vscode/*.vsix
