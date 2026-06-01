@@ -52,13 +52,54 @@ Binary output: `target/release/glance`
 ./target/release/glance --version
 ```
 
-## Usage
+## Developer CLI
 
-The daemon speaks JSON-RPC 2.0 over stdio — one request per line, one response per line.
+Glance includes a human-friendly CLI for developers — no JSON required. Every subcommand supports `--json` for machine-readable output.
 
 ```bash
-# start daemon manually (for testing)
-./target/release/glance
+# File metadata
+glance info /data/events.jsonl
+glance info /data/events.jsonl --json
+
+# Read lines (default: 20 lines from offset 0)
+glance read /data/events.jsonl
+glance read /data/events.jsonl --offset 1000 --limit 50
+glance read /data/events.jsonl --pretty          # expand JSON (JSONL only)
+glance read /data/events.jsonl --json
+
+# Search
+glance search /data/events.jsonl "error"
+glance search /data/events.jsonl "\d{3}" --regex
+glance search /data/events.jsonl "timeout" --max 100
+glance search /data/events.jsonl "error" --json  | jq '.results[].line'
+
+# Count
+glance count /data/events.jsonl "error"
+glance count /data/events.jsonl "\d+" --regex
+glance count /data/events.jsonl "error" --json   | jq .count
+
+# Validate JSONL — report lines that are not valid JSON
+glance validate /data/events.jsonl               # exits 1 if any invalid
+glance validate /data/events.jsonl --json        # machine-readable report
+
+# Run as daemon (for IDE extensions)
+glance serve
+```
+
+Match output is highlighted with `>>match<<` markers. Line numbers are 1-indexed.
+
+`validate` exits with code `1` if any invalid lines are found — useful in CI pipelines:
+
+```bash
+glance validate data.jsonl && echo "clean" || echo "has invalid lines"
+```
+
+## Daemon (JSON-RPC)
+
+The daemon speaks JSON-RPC 2.0 over stdio — one request per line, one response per line. Used by IDE extensions; for interactive use prefer the CLI above.
+
+```bash
+glance serve   # or just: glance (no subcommand)
 ```
 
 All requests accept an optional `"version": 1` field. If the version does not match the daemon, a warning is logged but the request is still processed.
@@ -209,9 +250,18 @@ glance/
 │   │   ├── stream.rs        read_lines_direct, stream_search/count (no-lock I/O)
 │   │   ├── pretty.rs        JSON pretty-printing with fallback
 │   │   └── csv.rs           RFC 4180 CSV/TSV parser (quoted fields, escaped quotes)
+│   ├── cli/                 developer CLI — one file per subcommand
+│   │   ├── mod.rs           subcommand dispatch
+│   │   ├── output.rs        Format enum — human vs JSON output (single responsibility)
+│   │   ├── info.rs          glance info
+│   │   ├── read.rs          glance read
+│   │   ├── search.rs        glance search
+│   │   ├── count.rs         glance count
+│   │   └── validate.rs      glance validate — JSONL integrity check
 │   └── server/
 │       └── rpc.rs           JSON-RPC 2.0 server (RwLock — concurrent reads)
 ├── tests/
+│   ├── cli_test.rs               CLI — all subcommands, flags, error cases (black-box)
 │   ├── line_index_test.rs        line index — offsets, CRLF, empty file, round-trip
 │   ├── cache_test.rs             cache — save/load, invalidation, corrupt/truncated
 │   ├── cache_edge_cases_test.rs  cache — persistence, sanity cap, OOM protection
@@ -236,10 +286,11 @@ glance/
 cargo test
 ```
 
-96 integration tests across 10 suites. All tests use real temporary files — no mocks.
+140 tests across 11 suites. All tests use real temporary files — no mocks.
 
 | Suite | Tests | Coverage |
 |---|---|---|
+| `cli_test` | 34 | all subcommands, `--json`, `validate`, error cases — black-box via binary spawn |
 | `line_index_test` | 6 | empty file, byte offsets, CRLF, round-trip via `from_parts` |
 | `cache_test` | 4 | save/load, cache invalidation on file change, corrupt magic bytes |
 | `cache_edge_cases_test` | 5 | persistence, sanity cap (OOM protection), truncated cache |
@@ -332,20 +383,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, code conventions,
 
 ## Changelog
 
-### v0.1.0
-- **Fix:** empty file incorrectly reported as 1 line — `LineIndex::build` now returns 0 lines for empty files
-- **Fix:** `Mutex` held during disk I/O replaced with `RwLock` — concurrent reads no longer block each other
-- **Fix:** `validate_path` moved to `src/security.rs` — single security gate for all file access
-- **Fix:** LFI via path traversal — `open` requests validated with `canonicalize`
-- **Fix:** cache OOM — `total_lines` capped at 500M before `Vec::with_capacity`
-- **Fix:** Unicode search — byte offsets from `line_lower` no longer used on `line` directly
-- **Fix:** blocking I/O in async — `cmd_read`, `cmd_search`, `cmd_count` use `spawn_blocking`
-- **Fix:** empty query now returns a clear error instead of matching every line
-- **Fix:** request size capped at 4MB to prevent unbounded memory use
-- **Refactor:** `reader/` split into `format.rs`, `search.rs`, `stream.rs`, `pretty.rs` — one responsibility per file
-- Added `--version` flag to CLI
-- Added 96 integration tests across 10 suites
-- Added CI with multi-platform builds and release workflow
+See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
 ## Roadmap
 

@@ -1,3 +1,4 @@
+pub mod cli;
 pub mod index;
 pub mod protocol;
 pub mod reader;
