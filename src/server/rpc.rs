@@ -170,17 +170,30 @@ impl RpcServer {
     async fn cmd_search(&self, params: Option<Value>) -> Result<Value> {
         let p: SearchParams = from_params(params)?;
         let max = p.max_results.unwrap_or(100);
-        let path = self.extract_path(p.file_id).await?;
-        let query = p.query.clone();
+        let before = p.before.unwrap_or(0);
+        let after = p.after.unwrap_or(0);
         let use_regex = p.regex.unwrap_or(false);
 
-        let (results, truncated) = tokio::task::spawn_blocking(move || {
-            if use_regex {
-                crate::reader::stream::stream_search_regex(&path, &query, max)
-            } else {
-                crate::reader::stream::stream_search(&path, &query, max)
-            }
-        }).await??;
+        // When context is requested we need the line index — open FileHandle.
+        // When no context, use the lighter standalone stream functions.
+        let (results, truncated) = if before > 0 || after > 0 {
+            let path = self.extract_path(p.file_id).await?;
+            let query = p.query.clone();
+            tokio::task::spawn_blocking(move || {
+                let h = crate::reader::FileHandle::open(&path)?;
+                h.search_with_context(&query, max, use_regex, before, after)
+            }).await??
+        } else {
+            let path = self.extract_path(p.file_id).await?;
+            let query = p.query.clone();
+            tokio::task::spawn_blocking(move || {
+                if use_regex {
+                    crate::reader::stream::stream_search_regex(&path, &query, max)
+                } else {
+                    crate::reader::stream::stream_search(&path, &query, max)
+                }
+            }).await??
+        };
         let total_found = results.len();
 
         Ok(serde_json::to_value(SearchResultsData { results, total_found, truncated })?)

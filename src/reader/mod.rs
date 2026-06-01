@@ -92,6 +92,34 @@ impl FileHandle {
         search::search_regex(&self.path, pattern, max_results)
     }
 
+    /// Search with context lines before/after each match.
+    /// Uses the line index for O(1) seeks when fetching context.
+    pub fn search_with_context(
+        &self,
+        query: &str,
+        max_results: usize,
+        use_regex: bool,
+        before: usize,
+        after: usize,
+    ) -> Result<(Vec<crate::protocol::response::SearchResult>, bool)> {
+        let (mut results, truncated) = if use_regex {
+            search::search_regex(&self.path, query, max_results)?
+        } else {
+            search::search(&self.path, query, max_results)?
+        };
+
+        if before > 0 || after > 0 {
+            for r in &mut results {
+                let (ctx_before, ctx_after) =
+                    search::fetch_context(&self.path, &self.index, r.line_number, before, after)?;
+                r.context_before = ctx_before;
+                r.context_after = ctx_after;
+            }
+        }
+
+        Ok((results, truncated))
+    }
+
     pub fn count(&self, query: &str) -> Result<u64> {
         search::count(&self.path, query)
     }

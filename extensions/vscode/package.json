@@ -2,7 +2,7 @@
   "name": "glance",
   "displayName": "Glance",
   "description": "Open large files (JSONL, CSV, logs 3GB+) without crashing",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "glance",
   "repository": {
     "type": "git",
