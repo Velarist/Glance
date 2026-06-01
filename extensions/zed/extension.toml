@@ -1,7 +1,7 @@
 id = "glance"
 name = "Glance"
 description = "Open and query large files (JSONL, CSV, logs 3GB+) without crashing"
-version = "0.3.2"
+version = "0.3.3"
 schema_version = 1
 authors = []
 

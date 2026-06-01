@@ -10,6 +10,14 @@ glance         # default (no subcommand)
 All requests accept an optional `"version": 1` field. Version mismatch logs a warning but still processes the request.
 
 Multiple files can be open simultaneously — each `open` call returns an independent `file_id`.
+When the same canonical path is already open, the daemon reuses the underlying file handle
+while keeping each `file_id` lifecycle independent.
+
+Known limitations:
+- Deduplication is keyed by canonical path, not file identity. Hardlinks to the same inode
+  through different canonical paths are treated as separate files.
+- Existing `file_id` leases are not automatically refreshed if the file changes on disk.
+  A later `open` of the same path checks file metadata and gets a fresh handle when needed.
 
 ---
 
