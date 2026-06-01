@@ -2,6 +2,23 @@
 
 ---
 
+## [0.3.3]
+
+### Fixed
+- Daemon `open` now deduplicates active file handles for the same canonical path while keeping each `file_id` lifecycle independent.
+- Reopening a file after it changes while an older lease is still active now gets a fresh handle and line index instead of reusing stale metadata.
+
+### Added
+- Black-box daemon coverage for duplicate open/close lifecycle behavior.
+- Internal dedup tests that verify shared handles are actually reused.
+- Tracing fields for daemon open/close handle lifecycle: dedup hit/miss, discarded builds, active leases, and active paths.
+
+### Known limitations
+- File handle deduplication is keyed by canonical path, so hardlinks to the same inode are not deduplicated.
+- Existing `file_id` leases keep their original line index if the file changes on disk; callers should `open` again to get a fresh handle.
+
+---
+
 ## [0.3.2]
 
 ### Fixed

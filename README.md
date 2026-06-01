@@ -63,6 +63,6 @@ cargo test   # 140 tests across 11 suites
 ## Roadmap
 
 - [ ] JetBrains plugin (Kotlin)
-- [ ] Deduplicate file handles
+- [x] Deduplicate file handles
 - [x] Configurable cache directory (`GLANCE_CACHE_DIR`) — v0.3.1
 - [x] Context lines for search results (`--before`/`--after` params) — v0.3.0
