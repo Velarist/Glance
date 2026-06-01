@@ -97,7 +97,7 @@ fn pretty_mode_expands_valid_json() {
         writeln!(w, r#"{{"a":1,"b":2}}"#).unwrap();
     }
     let _ = std::fs::remove_file(format!("{}.glance_idx", f.path().to_str().unwrap()));
-    let h = FileHandle::open(f.path().to_str().unwrap()).unwrap();
+    let _h = FileHandle::open(f.path().to_str().unwrap()).unwrap();
     // Use read_lines_direct with pretty=true via the public helper
     let result = glance::reader::read_lines_direct(
         f.path().to_str().unwrap(), 0, 0, 1, true, glance::reader::FileFormat::Jsonl

@@ -58,7 +58,6 @@ fn info_shows_line_count() {
 
 #[test]
 fn info_shows_format_jsonl() {
-    let f = tmp("{\"a\":1}\n{\"b\":2}\n");
     let mut f2 = tempfile::Builder::new().suffix(".jsonl").tempfile().unwrap();
     f2.write_all(b"{\"a\":1}\n{\"b\":2}\n").unwrap();
     glance().args(["info", f2.path().to_str().unwrap()])
