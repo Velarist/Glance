@@ -98,10 +98,9 @@ fn count_on_different_handles_independent() {
 #[test]
 fn handle_path_is_canonical() {
     let f = file("data\n");
-    let _path = f.path().to_str().unwrap();
     let h = open(&f);
-    // Canonical path should be absolute
-    assert!(h.path.starts_with('/'));
+    // Canonical path should be absolute (/ on Unix, C:\ on Windows)
+    assert!(std::path::Path::new(&h.path).is_absolute());
     // Should point to same file
     assert!(std::path::Path::new(&h.path).exists());
 }

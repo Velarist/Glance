@@ -6,8 +6,8 @@ fn valid_existing_file_returns_canonical_path() {
     let f = NamedTempFile::new().unwrap();
     let raw = f.path().to_str().unwrap();
     let result = validate_path(raw).unwrap();
-    // Canonical path should be absolute
-    assert!(result.starts_with('/'));
+    // Canonical path should be absolute (/ on Unix, C:\ on Windows)
+    assert!(std::path::Path::new(&result).is_absolute());
     // Should resolve to the same file
     assert!(std::path::Path::new(&result).exists());
 }
@@ -33,7 +33,11 @@ fn relative_path_resolves_to_absolute() {
     let raw = f.path().to_str().unwrap();
     // Use absolute path (tempfile gives absolute paths)
     let result = validate_path(raw).unwrap();
-    assert!(result.starts_with('/'), "should be absolute: {}", result);
+    assert!(
+        std::path::Path::new(&result).is_absolute(),
+        "should be absolute: {}",
+        result
+    );
 }
 
 #[test]
