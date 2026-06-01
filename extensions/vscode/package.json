@@ -6,7 +6,7 @@
   "publisher": "glance",
   "repository": {
     "type": "git",
-    "url": "https://github.com/glance-tool/glance"
+    "url": "https://github.com/Velarist/glance"
   },
   "license": "MIT",
   "engines": {
@@ -25,16 +25,36 @@
         "viewType": "glance.fileViewer",
         "displayName": "Glance Large File Viewer",
         "selector": [
-          { "filenamePattern": "*.jsonl" },
-          { "filenamePattern": "*.ndjson" },
-          { "filenamePattern": "*.ldjson" },
-          { "filenamePattern": "*.csv" },
-          { "filenamePattern": "*.tsv" },
-          { "filenamePattern": "*.log" },
-          { "filenamePattern": "*.sql" },
-          { "filenamePattern": "*.txt" },
-          { "filenamePattern": "*.xml" },
-          { "filenamePattern": "*.out" }
+          {
+            "filenamePattern": "*.jsonl"
+          },
+          {
+            "filenamePattern": "*.ndjson"
+          },
+          {
+            "filenamePattern": "*.ldjson"
+          },
+          {
+            "filenamePattern": "*.csv"
+          },
+          {
+            "filenamePattern": "*.tsv"
+          },
+          {
+            "filenamePattern": "*.log"
+          },
+          {
+            "filenamePattern": "*.sql"
+          },
+          {
+            "filenamePattern": "*.txt"
+          },
+          {
+            "filenamePattern": "*.xml"
+          },
+          {
+            "filenamePattern": "*.out"
+          }
         ],
         "priority": "default"
       }
