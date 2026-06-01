@@ -2,6 +2,14 @@
 
 ---
 
+## [0.3.2]
+
+### Fixed
+- Cross-platform test assertions now use path-aware absolute path checks instead of Unix-only `/` prefix checks.
+- Removed unused test variables that triggered warnings in CLI and reader edge case coverage.
+
+---
+
 ## [0.3.1]
 
 ### Fixed
