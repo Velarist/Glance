@@ -2,6 +2,13 @@
 
 ---
 
+## [0.2.1]
+
+### Fixed
+- `glance read` on CSV/TSV files now renders as an aligned table — `fields[]` were being parsed by the daemon but silently dropped during CLI mapping to `ReadLine`. JSON output also now includes `fields` per line.
+
+---
+
 ## [0.2.0]
 
 ### Added
