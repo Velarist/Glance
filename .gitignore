@@ -6,6 +6,7 @@ Cargo.lock
 extensions/vscode/out/
 extensions/vscode/node_modules/
 extensions/vscode/*.vsix
+extensions/vscode/bin/glance
 
 # Zed extension
 extensions/zed/target/
