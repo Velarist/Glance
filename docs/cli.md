@@ -61,14 +61,19 @@ glance search <path> <query> [--regex] [--max N] [--json]
 |---|---|---|
 | `--regex` | off | Treat query as regex (case-sensitive) |
 | `--max` | `50` | Maximum results to show |
+| `--before` | `0` | Lines of context before each match |
+| `--after` | `0` | Lines of context after each match |
 | `--json` | off | Machine-readable output |
 
 ```bash
 glance search /data/events.jsonl "error"
 glance search /data/events.jsonl "\d{3}" --regex
 glance search /data/events.jsonl "timeout" --max 100
+glance search /data/events.jsonl "error" --before 2 --after 2
 glance search /data/events.jsonl "error" --json | jq '.results[].line'
 ```
+
+Match line is marked with `▶`. Context lines are shown above/below, separated by `─────` between match groups.
 
 ---
 
