@@ -43,6 +43,9 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
+      - name: Test
+        run: cargo test
+
       - name: Upload binary (macOS)
         if: matrix.os == 'macos-latest'
         uses: actions/upload-artifact@v5
