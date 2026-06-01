@@ -37,6 +37,7 @@ fn relative_path_resolves_to_absolute() {
 }
 
 #[test]
+#[cfg(unix)]
 fn symlink_resolves_to_real_target() {
     let f = NamedTempFile::new().unwrap();
     let target = f.path();

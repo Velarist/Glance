@@ -98,7 +98,7 @@ fn count_on_different_handles_independent() {
 #[test]
 fn handle_path_is_canonical() {
     let f = file("data\n");
-    let path = f.path().to_str().unwrap();
+    let _path = f.path().to_str().unwrap();
     let h = open(&f);
     // Canonical path should be absolute
     assert!(h.path.starts_with('/'));
