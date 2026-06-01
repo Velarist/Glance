@@ -1,430 +1,334 @@
 /* global acquireVsCodeApi, GLANCE_CONFIG */
+'use strict';
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 const vscode = acquireVsCodeApi();
-const { totalLines, fileSizeMb, format, isJsonl, isCsv } = window.GLANCE_CONFIG;
+const CFG = window.GLANCE_CONFIG;
 
-const PAGE_RAW = 200;
+// ── State machine ─────────────────────────────────────────────────────────────
+// Single source of truth — no scattered globals.
+
+const state = {
+  // Pagination
+  offset: 0,
+  // Toggles
+  usePretty: false,
+  useRegex: false,
+  // Search
+  isSearching: false,
+  allMatches: [],
+  matchIdx: -1,
+  focusedLine: -1,
+  savedTotal: 0,
+  savedTruncated: false,
+  searchGen: 0,
+  // Expected offset for current read request — stale responses are ignored
+  expectedOffset: -1,
+};
+
+// Restore persisted state from VS Code (survives panel hide/show cycle)
+const saved = vscode.getState();
+if (saved) {
+  state.offset    = saved.offset    ?? 0;
+  state.usePretty = saved.usePretty ?? false;
+  state.useRegex  = saved.useRegex  ?? false;
+}
+
+function persist() {
+  vscode.setState({ offset: state.offset, usePretty: state.usePretty, useRegex: state.useRegex });
+}
+
+const PAGE_RAW    = 200;
 const PAGE_PRETTY = 10;
+const pageSize    = () => state.usePretty ? PAGE_PRETTY : PAGE_RAW;
 
-let offset = 0;
-let isSearching = false;
-let useRegex = false;
-let usePretty = false;
-let searchTimer = null;
+// ── DOM refs ──────────────────────────────────────────────────────────────────
 
-// Store current lines in memory so click handlers can reference content by index
-// instead of embedding content strings in onclick attributes (which CSP blocks).
-let currentLines = [];
+const $ = id => document.getElementById(id);
 
-// Search match navigation state
-let allMatches = [];      // all search results for prev/next navigation
-let matchIdx = -1;        // -1 = showing results list, >=0 = in match context mode
-let focusedLine = -1;     // line number to highlight in file context
-let savedTotalFound = 0;  // original total found (may be > allMatches.length if truncated)
-let savedTruncated = false;
-let searchGeneration = 0; // increments each search — prevents stale count from old search
+const els = {
+  info:        $('info'),
+  search:      $('search'),
+  lines:       $('lines'),
+  pageInfo:    $('page-info'),
+  matchCount:  $('match-count'),
+  matchInfo:   $('match-nav-info'),
+  toast:       $('toast'),
+  btnPrev:     $('btn-prev'),
+  btnNext:     $('btn-next'),
+  btnRegex:    $('btn-regex'),
+  btnPretty:   $('btn-pretty'),
+  btnMPrev:    $('btn-match-prev'),
+  btnMNext:    $('btn-match-next'),
+  gotoInput:   $('goto-input'),
+};
 
-// ── Init ────────────────────────────────────────────────────────────────
+// ── Init UI ───────────────────────────────────────────────────────────────────
 
-document.getElementById('info').textContent =
-  totalLines.toLocaleString() + ' lines • ' + fileSizeMb + ' MB • ' + format.toUpperCase();
+els.info.textContent =
+  CFG.totalLines.toLocaleString() + ' lines • ' + CFG.fileSizeMb + ' MB • ' + CFG.format.toUpperCase();
 
-if (isJsonl) {
-  document.getElementById('btn-pretty').classList.add('visible');
+if (CFG.isJsonl) { els.btnPretty.classList.add('visible'); }
+if (state.usePretty) { els.btnPretty.classList.add('active'); }
+if (state.useRegex)  { els.btnRegex.classList.add('active'); els.search.classList.add('regex-active'); }
+
+// ── Clipboard / Toast ─────────────────────────────────────────────────────────
+
+let currentLines = []; // for click-to-copy
+
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(() => showToast('Copied!'));
 }
 
-document.getElementById('btn-regex').addEventListener('click', toggleRegex);
-document.getElementById('btn-pretty').addEventListener('click', togglePretty);
-document.getElementById('btn-prev').addEventListener('click', prevPage);
-document.getElementById('btn-next').addEventListener('click', nextPage);
-document.getElementById('btn-match-prev').addEventListener('click', prevMatch);
-document.getElementById('btn-match-next').addEventListener('click', nextMatch);
-
-// ── Event delegation for #lines (no inline onclick needed) ──────────────
-
-document.getElementById('lines').addEventListener('click', function(e) {
-  const target = e.target;
-
-  // Line number: in search results list → jump to match; otherwise → copy
-  const lineNum = target.closest('.line-num, .row-num');
-  if (lineNum) {
-    const idx = parseInt(lineNum.dataset.idx, 10);
-    if (!isNaN(idx) && currentLines[idx]) {
-      if (matchIdx === -1 && allMatches.length > 0 && isSearching) {
-        jumpToMatch(idx);
-      } else {
-        copyText(currentLines[idx].content);
-      }
-    }
-    return;
-  }
-
-  // JSON card header
-  const cardHeader = target.closest('.json-card-header');
-  if (cardHeader) {
-    if (cardHeader.classList.contains('search-nav')) {
-      // Search result card → navigate to match context
-      const idx = parseInt(cardHeader.dataset.idx, 10);
-      if (!isNaN(idx)) { jumpToMatch(idx); }
-    } else if (cardHeader.dataset.cardId) {
-      // Raw card → toggle collapse
-      toggleRaw(cardHeader.dataset.cardId);
-    } else {
-      // Pretty card → copy content
-      const idx = parseInt(cardHeader.dataset.idx, 10);
-      if (!isNaN(idx) && currentLines[idx]) { copyText(currentLines[idx].content); }
-    }
-    return;
-  }
-
-  // Raw copy button
-  const copyBtn = target.closest('.raw-copy-btn');
-  if (copyBtn) {
-    const idx = parseInt(copyBtn.dataset.idx, 10);
-    if (!isNaN(idx) && currentLines[idx]) {
-      copyText(currentLines[idx].content);
-    }
-  }
-});
-
-// ── Toggles ────────────────────────────────────────────────────────────
-
-function toggleRegex() {
-  useRegex = !useRegex;
-  document.getElementById('btn-regex').classList.toggle('active', useRegex);
-  const input = document.getElementById('search');
-  input.classList.toggle('regex-active', useRegex);
-  input.placeholder = useRegex ? 'Regex pattern...' : 'Search in file...';
-  const q = input.value.trim();
-  if (q) { triggerSearch(q); }
+function showToast(msg) {
+  els.toast.textContent = msg;
+  els.toast.classList.add('show');
+  setTimeout(() => els.toast.classList.remove('show'), 1500);
 }
 
-function togglePretty() {
-  usePretty = !usePretty;
-  document.getElementById('btn-pretty').classList.toggle('active', usePretty);
-  if (allMatches.length > 0 && matchIdx === -1) {
-    // Re-render search results list with new pretty setting
-    renderSearch(allMatches, savedTotalFound, savedTruncated);
-  } else {
-    // Reload current page (works for both normal mode and match context)
-    const ps = pageSize();
-    const pageOffset = focusedLine >= 0
-      ? Math.max(0, focusedLine - Math.floor(ps / 2))
-      : offset;
-    vscode.postMessage({ type: 'read', offset: pageOffset, limit: ps, pretty: usePretty });
-  }
+// ── Request helpers ───────────────────────────────────────────────────────────
+
+function sendRead(offset, limit, pretty) {
+  state.expectedOffset = offset;
+  showLoading();
+  vscode.postMessage({ type: 'read', offset, limit, pretty });
 }
 
-function toggleRaw(cardId) {
-  const preview = document.getElementById(cardId + '-preview');
-  const full    = document.getElementById(cardId + '-full');
-  const arrow   = document.getElementById(cardId + '-arrow');
-  if (!preview || !full || !arrow) { return; }
-  const isOpen = full.style.display !== 'none';
-  preview.style.display = isOpen ? '' : 'none';
-  full.style.display    = isOpen ? 'none' : '';
-  arrow.textContent     = isOpen ? '▶ Show' : '▼ Hide';
+function showLoading() {
+  els.lines.innerHTML = '<div id="status">Loading…</div>';
 }
 
-// ── Navigation ──────────────────────────────────────────────────────────
+function showError(msg) {
+  els.lines.innerHTML = '<div id="error-msg">Error: ' + esc(msg) + '</div>';
+}
 
-function pageSize() { return usePretty ? PAGE_PRETTY : PAGE_RAW; }
+// ── Page navigation ───────────────────────────────────────────────────────────
 
 function loadPage(newOffset) {
   const ps = pageSize();
-  offset = Math.max(0, Math.min(newOffset, Math.max(0, totalLines - ps)));
-  isSearching = false;
-  matchIdx = -1;
-  focusedLine = -1;
-  allMatches = [];
-  savedTotalFound = 0;
-  savedTruncated = false;
-  document.getElementById('search').value = '';
-  document.getElementById('search').classList.remove('regex-active');
-  document.getElementById('match-count').textContent = '';
-  document.getElementById('match-nav-info').textContent = '';
-  document.getElementById('btn-match-prev').disabled = true;
-  document.getElementById('btn-match-next').disabled = true;
-  vscode.postMessage({ type: 'read', offset: offset, limit: ps, pretty: usePretty });
-  updateButtons();
+  state.offset      = Math.max(0, Math.min(newOffset, Math.max(0, CFG.totalLines - ps)));
+  state.isSearching = false;
+  state.allMatches  = [];
+  state.matchIdx    = -1;
+  state.focusedLine = -1;
+  state.savedTotal  = 0;
+  state.savedTruncated = false;
+  els.search.value  = '';
+  els.search.classList.toggle('regex-active', state.useRegex);
+  els.matchCount.textContent  = '';
+  els.matchInfo.textContent   = '';
+  els.btnMPrev.disabled = true;
+  els.btnMNext.disabled = true;
+  persist();
+  sendRead(state.offset, ps, state.usePretty);
+  updatePageButtons();
 }
 
-// ── Page navigation (always navigates pages, independent of search) ──────
+function prevPage() { loadPage(state.offset - pageSize()); }
+function nextPage() { loadPage(state.offset + pageSize()); }
 
-function prevPage() { loadPage(offset - pageSize()); }
-function nextPage() { loadPage(offset + pageSize()); }
-
-function updateButtons() {
+function updatePageButtons() {
   const ps = pageSize();
-  document.getElementById('btn-prev').disabled = offset <= 0;
-  document.getElementById('btn-next').disabled = offset + ps >= totalLines;
-  document.getElementById('btn-prev').textContent = '← Prev';
-  document.getElementById('btn-next').textContent = 'Next →';
+  els.btnPrev.disabled = state.offset <= 0;
+  els.btnNext.disabled = state.offset + ps >= CFG.totalLines;
 }
 
-// ── Match navigation (separate, only active when search has results) ──────
+// ── Match navigation ──────────────────────────────────────────────────────────
 
 function prevMatch() {
-  if (matchIdx > 0) {
-    jumpToMatch(matchIdx - 1);
-  } else if (matchIdx === 0) {
-    // Back to results list
-    matchIdx = -1;
-    focusedLine = -1;
-    renderSearch(allMatches, savedTotalFound, savedTruncated);
+  if (state.matchIdx > 0) {
+    jumpToMatch(state.matchIdx - 1);
+  } else if (state.matchIdx === 0) {
+    state.matchIdx    = -1;
+    state.focusedLine = -1;
+    renderSearch(state.allMatches, state.savedTotal, state.savedTruncated);
   }
 }
 
 function nextMatch() {
-  if (matchIdx === -1 && allMatches.length > 0) {
+  if (state.matchIdx === -1 && state.allMatches.length > 0) {
     jumpToMatch(0);
-  } else if (matchIdx >= 0 && matchIdx < allMatches.length - 1) {
-    jumpToMatch(matchIdx + 1);
+  } else if (state.matchIdx >= 0 && state.matchIdx < state.allMatches.length - 1) {
+    jumpToMatch(state.matchIdx + 1);
   }
 }
 
-function updateMatchNav() {
-  const hasPrev = matchIdx >= 0;
-  const hasNext = matchIdx === -1 ? allMatches.length > 0 : matchIdx < allMatches.length - 1;
-  document.getElementById('btn-match-prev').disabled = !hasPrev;
-  document.getElementById('btn-match-next').disabled = !hasNext;
-  const info = document.getElementById('match-nav-info');
-  if (allMatches.length > 0) {
-    info.textContent = matchIdx >= 0
-      ? (matchIdx + 1) + ' / ' + allMatches.length
-      : allMatches.length + ' matches';
+function updateMatchButtons() {
+  const hasNext = state.matchIdx === -1
+    ? state.allMatches.length > 0
+    : state.matchIdx < state.allMatches.length - 1;
+  els.btnMPrev.disabled = state.matchIdx < 0;
+  els.btnMNext.disabled = !hasNext;
+  if (state.matchIdx >= 0) {
+    const lineNum = state.allMatches[state.matchIdx].line_number + 1; // 1-indexed
+    els.matchInfo.textContent =
+      (state.matchIdx + 1) + ' / ' + state.allMatches.length + ' — Line ' + lineNum.toLocaleString();
+  } else if (state.allMatches.length > 0) {
+    els.matchInfo.textContent = state.allMatches.length + ' matches';
   } else {
-    info.textContent = '';
+    els.matchInfo.textContent = '';
   }
 }
 
 function jumpToMatch(idx) {
-  if (idx < 0 || idx >= allMatches.length) { return; }
-  matchIdx = idx;
-  focusedLine = allMatches[idx].line_number;
-  const ps = pageSize();
-  const pageOffset = Math.max(0, focusedLine - Math.floor(ps / 2));
-  vscode.postMessage({ type: 'read', offset: pageOffset, limit: ps, pretty: usePretty });
-  updateMatchNav();
+  if (idx < 0 || idx >= state.allMatches.length) { return; }
+  state.matchIdx    = idx;
+  state.focusedLine = state.allMatches[idx].line_number;
+  const ps  = pageSize();
+  const off = Math.max(0, state.focusedLine - Math.floor(ps / 2));
+  updateMatchButtons();
+  sendRead(off, ps, state.usePretty);
 }
 
-// ── Go-to-line ──────────────────────────────────────────────────────────
+// ── Toggles ───────────────────────────────────────────────────────────────────
 
-document.getElementById('goto-input').addEventListener('keydown', function(e) {
-  if (e.key !== 'Enter') { return; }
-  const n = parseInt(this.value, 10);
-  if (isNaN(n) || n < 1 || n > totalLines) {
-    this.classList.add('goto-error');
-    setTimeout(function() { document.getElementById('goto-input').classList.remove('goto-error'); }, 800);
-    return;
+function toggleRegex() {
+  state.useRegex = !state.useRegex;
+  els.btnRegex.classList.toggle('active', state.useRegex);
+  els.search.classList.toggle('regex-active', state.useRegex);
+  els.search.placeholder = state.useRegex ? 'Regex pattern…' : 'Search in file…';
+  persist();
+  const q = els.search.value.trim();
+  if (q) { triggerSearch(q); }
+}
+
+function togglePretty() {
+  state.usePretty = !state.usePretty;
+  els.btnPretty.classList.toggle('active', state.usePretty);
+  persist();
+  if (state.isSearching && state.matchIdx === -1 && state.allMatches.length > 0) {
+    renderSearch(state.allMatches, state.savedTotal, state.savedTruncated);
+  } else if (state.isSearching && state.matchIdx >= 0) {
+    jumpToMatch(state.matchIdx);
+  } else {
+    loadPage(state.offset);
   }
-  this.classList.remove('goto-error');
-  this.value = '';
-  // Use loadPage so offset is synced and pretty mode is respected
-  loadPage(n - 1);
-});
+}
 
-// ── Search ───────────────────────────────────────────────────────────────
+// ── Search ────────────────────────────────────────────────────────────────────
+
+let searchTimer = null;
 
 function triggerSearch(q) {
-  isSearching = true;
-  matchIdx = -1;
-  focusedLine = -1;
-  allMatches = [];
-  savedTotalFound = 0;
-  savedTruncated = false;
-  searchGeneration++;
-  const gen = searchGeneration;
-  document.getElementById('match-count').textContent = 'searching…';
-  document.getElementById('match-nav-info').textContent = '';
-  document.getElementById('btn-match-prev').disabled = true;
-  document.getElementById('btn-match-next').disabled = true;
-  updateButtons();
-  vscode.postMessage({ type: 'search', query: q, useRegex: useRegex });
-  vscode.postMessage({ type: 'count', query: q, useRegex: useRegex, gen: gen });
+  state.isSearching = true;
+  state.allMatches  = [];
+  state.matchIdx    = -1;
+  state.focusedLine = -1;
+  state.searchGen++;
+  const gen = state.searchGen;
+  els.matchCount.textContent = 'searching…';
+  els.btnMPrev.disabled = true;
+  els.btnMNext.disabled = true;
+  updatePageButtons();
+  vscode.postMessage({ type: 'search', query: q, useRegex: state.useRegex });
+  vscode.postMessage({ type: 'count',  query: q, useRegex: state.useRegex, gen });
 }
 
-document.getElementById('search').addEventListener('input', function() {
-  clearTimeout(searchTimer);
-  const q = this.value.trim();
-  if (!q) { loadPage(offset); return; }
-  searchTimer = setTimeout(function() { triggerSearch(document.getElementById('search').value.trim()); }, 300);
-});
-
-// ── Clipboard ────────────────────────────────────────────────────────────
-
-function copyText(content) {
-  navigator.clipboard.writeText(content).then(function() { showToast('Copied!'); });
-}
-
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  setTimeout(function() { t.classList.remove('show'); }, 1500);
-}
-
-// ── Message handler ──────────────────────────────────────────────────────
+// ── Message handler ───────────────────────────────────────────────────────────
 
 window.addEventListener('message', function(e) {
   const msg = e.data;
-  if (msg.type === 'lines')          { renderLines(msg.lines, msg.offset, msg.total_lines); }
-  if (msg.type === 'search_results') { renderSearch(msg.results, msg.total_found, msg.truncated); }
-  if (msg.type === 'count_result') {
-    // Only apply if generation matches — prevents stale count from old search
-    if (msg.gen === undefined || msg.gen === searchGeneration) {
-      document.getElementById('match-count').textContent = msg.count.toLocaleString() + ' total';
+
+  if (msg.type === 'lines') {
+    renderLines(msg.lines, msg.offset, msg.total_lines);
+  } else if (msg.type === 'search_results') {
+    renderSearch(msg.results, msg.total_found, msg.truncated);
+  } else if (msg.type === 'count_result') {
+    if (msg.gen === undefined || msg.gen === state.searchGen) {
+      els.matchCount.textContent = msg.count.toLocaleString() + ' total';
     }
+  } else if (msg.type === 'error') {
+    showError(msg.message);
   }
-  if (msg.type === 'error')          { showError(msg.message); }
 });
 
-// ── Renderers ────────────────────────────────────────────────────────────
+// ── Renderers ─────────────────────────────────────────────────────────────────
 
 function renderLines(lines, off, total) {
+  // Ignore stale responses — user navigated to a different location before this arrived
+  if (state.expectedOffset >= 0 && off !== state.expectedOffset) { return; }
   currentLines = lines;
-  offset = off; // sync offset from server so Prev/Next work correctly after goto
-  const el = document.getElementById('lines');
-  if (!lines.length) {
-    el.innerHTML = '<div id="status">No lines found.</div>';
-    updateButtons();
-    return;
-  }
+  // Sync offset from server response (ensures goto/jumpToMatch keep state correct)
+  if (!state.isSearching) { state.offset = off; }
 
-  if (isCsv && lines[0].fields) {
+  const el = els.lines;
+  if (!lines.length) { el.innerHTML = '<div id="status">No lines found.</div>'; return; }
+
+  if (CFG.isCsv && lines[0].fields) {
     el.innerHTML = renderCsvTable(lines);
-  } else if (usePretty && isJsonl) {
+  } else if (state.usePretty && CFG.isJsonl) {
     el.innerHTML = lines.map(function(l, idx) {
-      const isFocused = focusedLine >= 0 && l.number === focusedLine;
-      const focusedMatch = isFocused && matchIdx >= 0 ? allMatches[matchIdx] : null;
-      return renderJsonCard(l, idx, focusedMatch);
+      const isFocused = state.focusedLine >= 0 && l.number === state.focusedLine;
+      const fm = isFocused && state.matchIdx >= 0 ? state.allMatches[state.matchIdx] : null;
+      return renderJsonCard(l, idx, fm, isFocused);
     }).join('');
   } else {
     el.innerHTML = lines.map(function(l, idx) {
-      const isFocused = focusedLine >= 0 && l.number === focusedLine;
-      const match = isFocused && matchIdx >= 0 ? allMatches[matchIdx] : null;
-      const content = match
-        ? escHighlight(l.content, match.match_start, match.match_end)
-        : esc(l.content);
-      return '<div class="line">' +
+      const isFocused = state.focusedLine >= 0 && l.number === state.focusedLine;
+      const fm = isFocused && state.matchIdx >= 0 ? state.allMatches[state.matchIdx] : null;
+      const content = fm ? highlightInContent(l.content, fm) : esc(l.content);
+      return '<div class="line' + (isFocused ? ' line-focused' : '') + '">' +
         '<span class="line-num" data-idx="' + idx + '">' + (l.number + 1) + '</span>' +
         '<span class="line-content">' + content + '</span>' +
         '</div>';
     }).join('');
   }
 
-  el.scrollTop = 0; // reset after innerHTML so scroll is correct
+  el.scrollTop = 0;
 
-  // Highlight and scroll to focused line (after match navigation)
-  if (focusedLine >= 0) {
-    let found = false;
-    // Raw/normal mode: look for .line with matching .line-num text
-    const allLineEls = el.querySelectorAll('.line');
-    for (let i = 0; i < allLineEls.length; i++) {
-      const numEl = allLineEls[i].querySelector('.line-num');
-      if (numEl && parseInt(numEl.textContent, 10) === focusedLine + 1) {
-        allLineEls[i].classList.add('line-focused');
-        allLineEls[i].scrollIntoView({ block: 'center' });
-        found = true;
-        break;
+  // Defer scroll until after browser reflow.
+  // Scroll to the .match span (highlighted text) if available,
+  // else fall back to the focused line/card.
+  // Use getBoundingClientRect() — reliable regardless of offsetParent hierarchy.
+  if (state.focusedLine >= 0) {
+    requestAnimationFrame(function() {
+      const matchSpan = el.querySelector('.line-focused .match, .json-card.line-focused .match');
+      const target    = matchSpan || el.querySelector('.line-focused, .json-card.line-focused');
+      if (!target) { return; }
+      const containerRect = el.getBoundingClientRect();
+      const targetRect    = target.getBoundingClientRect();
+
+      // Vertical scroll — center the target in the viewport
+      const relativeTop = targetRect.top - containerRect.top + el.scrollTop;
+      el.scrollTop = relativeTop - Math.floor((el.clientHeight - target.offsetHeight) / 2);
+
+      // Horizontal scroll — only when scrolling to the match span (not the whole line/card).
+      // In raw mode, match text may be far to the right in a long JSON line.
+      if (matchSpan) {
+        const relativeLeft = targetRect.left - containerRect.left + el.scrollLeft;
+        el.scrollLeft = relativeLeft - Math.floor((el.clientWidth - target.offsetWidth) / 2);
+      } else {
+        el.scrollLeft = 0; // reset to left when showing card/line (no specific match position)
       }
-    }
-    // Pretty mode: look for .json-card with data-line-num attribute
-    if (!found) {
-      const allCards = el.querySelectorAll('.json-card[data-line-num]');
-      for (let i = 0; i < allCards.length; i++) {
-        if (parseInt(allCards[i].dataset.lineNum, 10) === focusedLine) {
-          allCards[i].classList.add('line-focused');
-          allCards[i].scrollIntoView({ block: 'center' });
-          break;
-        }
-      }
-    }
+    });
   }
 
   const end = Math.min(off + lines.length, total);
-  document.getElementById('page-info').textContent =
+  els.pageInfo.textContent =
     'Lines ' + (off + 1).toLocaleString() + '–' + end.toLocaleString() + ' of ' + total.toLocaleString();
-  updateButtons();
-}
-
-function renderJsonCard(l, idx, focusedMatch) {
-  const isPretty = l.content.includes('\n');
-
-  if (isPretty) {
-    let body;
-    if (focusedMatch) {
-      // match_start/end refer to raw content positions; find in pretty using proportion
-      const rawMatchText = focusedMatch.content.slice(focusedMatch.match_start, focusedMatch.match_end);
-      const pos = findMatchInPretty(l.content, rawMatchText, focusedMatch.match_start, focusedMatch.content.length);
-      body = pos >= 0
-        ? escHighlight(l.content, pos, pos + rawMatchText.length)
-        : esc(l.content);
-    } else {
-      body = esc(l.content);
-    }
-    return '<div class="json-card" data-line-num="' + l.number + '">' +
-      '<div class="json-card-header" data-idx="' + idx + '" title="Click to copy">' +
-      '<span>Line ' + (l.number + 1) + '</span><span>⎘</span>' +
-      '</div>' +
-      '<div class="json-card-body">' + body + '</div>' +
-      '</div>';
-  }
-
-  const PREVIEW_LEN = 150;
-  const cardId = 'raw-' + l.number;
-  const preview = l.content.length > PREVIEW_LEN
-    ? esc(l.content.slice(0, PREVIEW_LEN)) + '<span class="raw-ellipsis">… (' + l.content.length.toLocaleString() + ' chars)</span>'
-    : esc(l.content);
-
-  return '<div class="json-card raw" data-line-num="' + l.number + '">' +
-    '<div class="json-card-header" data-card-id="' + cardId + '">' +
-    '<span>⚠ Line ' + (l.number + 1) + ' — not valid JSON (possibly multi-line record)</span>' +
-    '<span id="' + cardId + '-arrow">▶ Show</span>' +
-    '</div>' +
-    '<div class="json-card-body raw-preview" id="' + cardId + '-preview">' + preview + '</div>' +
-    '<div class="json-card-body raw-full" id="' + cardId + '-full" style="display:none">' +
-    esc(l.content) +
-    '<br><button class="raw-copy-btn" data-idx="' + idx + '">Copy raw content</button>' +
-    '</div>' +
-    '</div>';
-}
-
-function renderCsvTable(lines) {
-  const numCols = lines[0].fields.length;
-  let headerHtml = '<tr><th class="row-num">#</th>';
-  for (let i = 0; i < numCols; i++) { headerHtml += '<th>Col ' + (i + 1) + '</th>'; }
-  headerHtml += '</tr>';
-
-  const rowsHtml = lines.map(function(l, idx) {
-    const fields = l.fields || [];
-    let row = '<tr><td class="row-num" data-idx="' + idx + '">' + (l.number + 1) + '</td>';
-    for (let i = 0; i < numCols; i++) {
-      row += '<td title="' + esc(fields[i] || '') + '">' + esc(fields[i] || '') + '</td>';
-    }
-    return row + '</tr>';
-  }).join('');
-
-  return '<table id="csv-table"><thead>' + headerHtml + '</thead><tbody>' + rowsHtml + '</tbody></table>';
+  updatePageButtons();
 }
 
 function renderSearch(results, totalFound, truncated) {
-  allMatches = results;
-  savedTotalFound = totalFound;
-  savedTruncated = truncated;
-  matchIdx = -1;
-  focusedLine = -1;
+  state.allMatches     = results;
+  state.savedTotal     = totalFound;
+  state.savedTruncated = truncated;
+  state.matchIdx       = -1;
+  state.focusedLine    = -1;
   currentLines = results.map(function(r) { return { number: r.line_number, content: r.content }; });
-  const el = document.getElementById('lines');
+
+  const el = els.lines;
   if (!results.length) {
     el.innerHTML = '<div id="status">No matches found.</div>';
-    document.getElementById('page-info').textContent = '0 matches';
-    updateMatchNav();
+    els.pageInfo.textContent = '0 matches';
+    updateMatchButtons();
     return;
   }
+
   el.scrollTop = 0;
 
-  if (usePretty && isJsonl) {
+  if (state.usePretty && CFG.isJsonl) {
     el.innerHTML = results.map(renderSearchCard).join('');
   } else {
     el.innerHTML = results.map(function(r, idx) {
@@ -436,27 +340,61 @@ function renderSearch(results, totalFound, truncated) {
   }
 
   const suffix = truncated ? ' (first ' + results.length + ' shown)' : '';
-  document.getElementById('page-info').textContent =
-    totalFound.toLocaleString() + ' matches' + suffix;
-  updateMatchNav();
-  updateButtons();
+  els.pageInfo.textContent = totalFound.toLocaleString() + ' matches' + suffix;
+  updateMatchButtons();
+}
+
+function renderJsonCard(l, idx, focusedMatch, isFocused) {
+  const isPretty = l.content.includes('\n');
+  const lineNum  = 'data-line-num="' + l.number + '"';
+  // line-focused enables scroll-into-view and visual indicator
+  const focusedClass = isFocused ? ' line-focused' : '';
+
+  if (isPretty) {
+    let body;
+    if (focusedMatch) {
+      body = highlightInContent(l.content, focusedMatch);
+    } else {
+      body = esc(l.content);
+    }
+    return '<div class="json-card' + focusedClass + '" ' + lineNum + '>' +
+      '<div class="json-card-header" data-idx="' + idx + '" title="Click to copy">' +
+      '<span>Line ' + (l.number + 1) + '</span><span>⎘</span>' +
+      '</div><div class="json-card-body">' + body + '</div></div>';
+  }
+
+  const PREVIEW = 150;
+  const cardId  = 'raw-' + l.number;
+  const preview = l.content.length > PREVIEW
+    ? esc(l.content.slice(0, PREVIEW)) + '<span class="raw-ellipsis">… (' + l.content.length.toLocaleString() + ' chars)</span>'
+    : esc(l.content);
+
+  return '<div class="json-card raw' + focusedClass + '" ' + lineNum + '>' +
+    '<div class="json-card-header" data-card-id="' + cardId + '">' +
+    '<span>⚠ Line ' + (l.number + 1) + ' — not valid JSON</span>' +
+    '<span id="' + cardId + '-arrow">▶ Show</span>' +
+    '</div>' +
+    '<div class="json-card-body raw-preview" id="' + cardId + '-preview">' + preview + '</div>' +
+    '<div class="json-card-body raw-full" id="' + cardId + '-full" style="display:none">' +
+    esc(l.content) +
+    '<br><button class="raw-copy-btn" data-idx="' + idx + '">Copy</button>' +
+    '</div></div>';
 }
 
 function renderSearchCard(r, idx) {
   let displayContent = r.content;
   let hlStart = r.match_start;
-  let hlEnd = r.match_end;
+  let hlEnd   = r.match_end;
 
   if (r.content.trim().startsWith('{')) {
     try {
-      const parsed = JSON.parse(r.content);
-      const pretty = JSON.stringify(parsed, null, 2);
+      const pretty = JSON.stringify(JSON.parse(r.content), null, 2);
       const matchText = r.content.slice(r.match_start, r.match_end);
       const pos = findMatchInPretty(pretty, matchText, r.match_start, r.content.length);
       displayContent = pretty;
       hlStart = pos >= 0 ? pos : -1;
-      hlEnd = pos >= 0 ? pos + matchText.length : -1;
-    } catch (e) { /* keep raw if not valid JSON */ }
+      hlEnd   = pos >= 0 ? pos + matchText.length : -1;
+    } catch (_) { /* keep raw */ }
   }
 
   const body = (hlStart >= 0 && hlEnd > hlStart)
@@ -466,45 +404,132 @@ function renderSearchCard(r, idx) {
   return '<div class="json-card">' +
     '<div class="json-card-header search-nav" data-idx="' + idx + '" title="Click to view in context">' +
     '<span>Line ' + (r.line_number + 1) + '</span><span>→ view</span>' +
-    '</div>' +
-    '<div class="json-card-body">' + body + '</div>' +
-    '</div>';
+    '</div><div class="json-card-body">' + body + '</div></div>';
 }
 
-function showError(msg) {
-  document.getElementById('lines').innerHTML = '<div id="error-msg">Error: ' + esc(msg) + '</div>';
+function renderCsvTable(lines) {
+  const numCols = lines[0].fields.length;
+  let headerHtml = '<tr><th class="row-num">#</th>';
+  for (let i = 0; i < numCols; i++) { headerHtml += '<th>Col ' + (i + 1) + '</th>'; }
+  headerHtml += '</tr>';
+  const rowsHtml = lines.map(function(l, idx) {
+    const fields = l.fields || [];
+    let row = '<tr><td class="row-num" data-idx="' + idx + '">' + (l.number + 1) + '</td>';
+    for (let i = 0; i < numCols; i++) {
+      row += '<td title="' + esc(fields[i] || '') + '">' + esc(fields[i] || '') + '</td>';
+    }
+    return row + '</tr>';
+  }).join('');
+  return '<table id="csv-table"><thead>' + headerHtml + '</thead><tbody>' + rowsHtml + '</tbody></table>';
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+// ── Event delegation ──────────────────────────────────────────────────────────
 
-// Find the occurrence of matchText in pretty that is closest to the
-// proportionally-scaled position of the match in the raw content.
-// This handles cases where matchText (e.g. "id") appears multiple times.
-function findMatchInPretty(pretty, matchText, rawMatchStart, rawLength) {
-  if (!matchText || !pretty) { return -1; }
-  const targetPos = rawLength > 0
-    ? Math.floor((rawMatchStart / rawLength) * pretty.length)
-    : 0;
-  let bestPos = -1;
-  let bestDist = Infinity;
-  let from = 0;
-  while (true) {
-    const pos = pretty.indexOf(matchText, from);
-    if (pos === -1) { break; }
-    const dist = Math.abs(pos - targetPos);
-    if (dist < bestDist) { bestDist = dist; bestPos = pos; }
-    from = pos + 1;
+els.lines.addEventListener('click', function(e) {
+  const target = e.target;
+
+  const lineNum = target.closest('.line-num, .row-num');
+  if (lineNum) {
+    const idx = parseInt(lineNum.dataset.idx, 10);
+    if (!isNaN(idx) && currentLines[idx]) {
+      if (state.isSearching && state.matchIdx === -1 && state.allMatches.length > 0) {
+        jumpToMatch(idx);
+      } else {
+        copyText(currentLines[idx].content);
+      }
+    }
+    return;
   }
-  return bestPos;
+
+  const cardHeader = target.closest('.json-card-header');
+  if (cardHeader) {
+    if (cardHeader.classList.contains('search-nav')) {
+      const idx = parseInt(cardHeader.dataset.idx, 10);
+      if (!isNaN(idx)) { jumpToMatch(idx); }
+    } else if (cardHeader.dataset.cardId) {
+      toggleRaw(cardHeader.dataset.cardId);
+    } else {
+      const idx = parseInt(cardHeader.dataset.idx, 10);
+      if (!isNaN(idx) && currentLines[idx]) { copyText(currentLines[idx].content); }
+    }
+    return;
+  }
+
+  const copyBtn = target.closest('.raw-copy-btn');
+  if (copyBtn) {
+    const idx = parseInt(copyBtn.dataset.idx, 10);
+    if (!isNaN(idx) && currentLines[idx]) { copyText(currentLines[idx].content); }
+  }
+});
+
+function toggleRaw(cardId) {
+  const preview = $( cardId + '-preview');
+  const full    = $(cardId + '-full');
+  const arrow   = $(cardId + '-arrow');
+  if (!preview || !full || !arrow) { return; }
+  const isOpen  = full.style.display !== 'none';
+  preview.style.display = isOpen ? '' : 'none';
+  full.style.display    = isOpen ? 'none' : '';
+  arrow.textContent     = isOpen ? '▶ Show' : '▼ Hide';
 }
+
+// ── Button listeners ──────────────────────────────────────────────────────────
+
+els.btnRegex.addEventListener('click', toggleRegex);
+els.btnPretty.addEventListener('click', togglePretty);
+els.btnPrev.addEventListener('click', prevPage);
+els.btnNext.addEventListener('click', nextPage);
+els.btnMPrev.addEventListener('click', prevMatch);
+els.btnMNext.addEventListener('click', nextMatch);
+
+els.search.addEventListener('input', function() {
+  clearTimeout(searchTimer);
+  const q = this.value.trim();
+  if (!q) { loadPage(state.offset); return; }
+  searchTimer = setTimeout(function() {
+    const q2 = els.search.value.trim();
+    if (q2) { triggerSearch(q2); }
+  }, 300);
+});
+
+els.search.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') { e.preventDefault(); if (e.shiftKey) { prevMatch(); } else { nextMatch(); } }
+});
+
+els.gotoInput.addEventListener('keydown', function(e) {
+  if (e.key !== 'Enter') { return; }
+  const n = parseInt(this.value, 10);
+  if (isNaN(n) || n < 1 || n > CFG.totalLines) {
+    this.classList.add('goto-error');
+    setTimeout(function() { els.gotoInput.classList.remove('goto-error'); }, 800);
+    return;
+  }
+  this.classList.remove('goto-error');
+  this.value = '';
+  loadPage(n - 1);
+});
+
+document.addEventListener('keydown', function(e) {
+  if (e.ctrlKey && e.key === 'g') { e.preventDefault(); els.gotoInput.focus(); }
+  if (e.ctrlKey && e.key === 'f') { e.preventDefault(); els.search.focus(); }
+  if (e.ctrlKey && e.key === 'r') { e.preventDefault(); toggleRegex(); }
+  if (e.key === 'Escape') {
+    if (state.matchIdx >= 0) {
+      state.matchIdx = -1; state.focusedLine = -1;
+      renderSearch(state.allMatches, state.savedTotal, state.savedTruncated);
+    } else if (els.search.value) {
+      els.search.value = ''; loadPage(state.offset);
+    }
+  }
+  if (e.altKey && e.key === 'ArrowLeft')  { if (!els.btnPrev.disabled) { prevPage(); } }
+  if (e.altKey && e.key === 'ArrowRight') { if (!els.btnNext.disabled) { nextPage(); } }
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function esc(s) {
   if (s == null) { return ''; }
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function escHighlight(s, start, end) {
@@ -513,28 +538,60 @@ function escHighlight(s, start, end) {
     esc(s.slice(end));
 }
 
-// ── Keyboard shortcuts ────────────────────────────────────────────────────
-
-document.addEventListener('keydown', function(e) {
-  if (e.ctrlKey && e.key === 'g') { e.preventDefault(); document.getElementById('goto-input').focus(); }
-  if (e.ctrlKey && e.key === 'f') { e.preventDefault(); document.getElementById('search').focus(); }
-  if (e.ctrlKey && e.key === 'r') { e.preventDefault(); toggleRegex(); }
-  if (e.key === 'Escape') {
-    const s = document.getElementById('search');
-    if (s.value) {
-      s.value = '';
-      loadPage(offset);
+/// Highlight match text in displayed content.
+/// Strategy: try stored match text first, fallback to current search query.
+/// Always does case-insensitive search in the ACTUAL displayed content —
+/// never trusts stored byte/char offsets blindly.
+function highlightInContent(displayContent, fm) {
+  // Try to extract the match text from stored search result
+  let matchText = '';
+  try {
+    if (fm && fm.content && fm.match_start < fm.match_end) {
+      matchText = fm.content.slice(fm.match_start, fm.match_end);
     }
-  }
-  // Enter / Shift+Enter → next/prev match when search has results
-  if (e.key === 'Enter' && document.activeElement === document.getElementById('search')) {
-    e.preventDefault();
-    if (e.shiftKey) { prevMatch(); } else { nextMatch(); }
-  }
-  if (e.altKey && e.key === 'ArrowLeft')  { if (!document.getElementById('btn-prev').disabled) { prevPage(); } }
-  if (e.altKey && e.key === 'ArrowRight') { if (!document.getElementById('btn-next').disabled) { nextPage(); } }
-});
+  } catch (_) {}
 
-// ── Start ─────────────────────────────────────────────────────────────────
+  // Fallback: use current search query directly
+  if (!matchText) {
+    matchText = els.search.value.trim();
+  }
 
-loadPage(0);
+  if (!matchText) { return esc(displayContent); }
+
+  // Case-insensitive search in displayed content — handles pretty vs raw differences
+  const lowerDisplay = displayContent.toLowerCase();
+  const lowerMatch   = matchText.toLowerCase();
+
+  // Use proportional position if we have reference coords, else find first occurrence
+  let pos = -1;
+  if (fm && fm.content && fm.content.length > 0) {
+    pos = findMatchInPretty(displayContent, lowerMatch, fm.match_start, fm.content.length);
+  }
+  if (pos < 0) {
+    pos = lowerDisplay.indexOf(lowerMatch);
+  }
+
+  return pos >= 0
+    ? escHighlight(displayContent, pos, pos + matchText.length)
+    : esc(displayContent);
+}
+
+// Find the occurrence of searchText (lowercase) in pretty (lowercase) closest to targetProportion.
+function findMatchInPretty(pretty, searchTextLower, rawStart, rawLen) {
+  if (!searchTextLower || !pretty) { return -1; }
+  const prettyLower = pretty.toLowerCase();
+  const targetPos   = rawLen > 0 ? Math.floor((rawStart / rawLen) * pretty.length) : 0;
+  let best = -1, bestDist = Infinity, from = 0;
+  while (true) {
+    const pos = prettyLower.indexOf(searchTextLower, from);
+    if (pos === -1) { break; }
+    const dist = Math.abs(pos - targetPos);
+    if (dist < bestDist) { bestDist = dist; best = pos; }
+    from = pos + 1;
+  }
+  return best;
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+
+loadPage(state.offset);

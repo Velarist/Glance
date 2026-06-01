@@ -94,7 +94,7 @@ body {
 
 /* ── Content area ─────────────────────────────────────────────────────── */
 
-#lines { overflow-y: auto; height: calc(100vh - 76px); }
+#lines { overflow-y: auto; overflow-x: auto; height: calc(100vh - 76px); }
 
 /* ── Plain line view ──────────────────────────────────────────────────── */
 
@@ -116,18 +116,18 @@ body {
 .line-content { padding: 1px 8px; white-space: pre; overflow-x: visible; flex: 1; }
 
 .match {
-  background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.4));
-  outline: 1px solid var(--vscode-editor-findMatchHighlightBorder, var(--vscode-focusBorder, #007acc));
+  background: var(--vscode-editor-findMatchBackground, rgba(234, 92, 0, 0.6));
+  outline: 2px solid var(--vscode-editor-findMatchBorder, var(--vscode-focusBorder, #f97316));
   border-radius: 2px;
+  padding: 0 1px;
 }
 
-/* Focused line marker — left border only, so .match highlight stays visible */
+/* Focused line — subtle left border only, let .match highlight speak for itself */
 .line-focused {
   border-left: 3px solid var(--vscode-focusBorder, #007acc);
-  background: var(--vscode-list-hoverBackground) !important;
 }
 .json-card.line-focused {
-  outline: 2px solid var(--vscode-focusBorder, #007acc);
+  border-left: 3px solid var(--vscode-focusBorder, #007acc) !important;
 }
 
 /* Search results — line numbers are clickable to navigate */
