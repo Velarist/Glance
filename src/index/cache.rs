@@ -8,8 +8,17 @@ use super::line_index::LineIndex;
 const MAGIC: &[u8; 8] = b"GLNCIDX1";
 
 /// Return the path where the index cache for `source_path` would be stored.
+///
+/// If `GLANCE_CACHE_DIR` is set, caches go there using a filename derived
+/// from the full source path (slashes replaced with underscores).
+/// Otherwise, the cache file lives alongside the source file (default).
 fn cache_path(source_path: &str) -> String {
-    format!("{}.glance_idx", source_path)
+    if let Ok(dir) = std::env::var("GLANCE_CACHE_DIR") {
+        let safe_name = source_path.replace(['/', '\\', ':'], "_");
+        format!("{}/{}.glance_idx", dir.trim_end_matches('/'), safe_name)
+    } else {
+        format!("{}.glance_idx", source_path)
+    }
 }
 
 /// Load a cached index if it exists and is still valid for `source_path`.

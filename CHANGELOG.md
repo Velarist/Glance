@@ -2,6 +2,20 @@
 
 ---
 
+## [0.3.1]
+
+### Fixed
+- `ContextLine.line_number` in CLI `--json` output now 1-indexed, consistent with `SearchMatch.line`
+
+### Added
+- `GLANCE_CACHE_DIR` environment variable — store index caches in a custom directory instead of alongside source files. Useful for read-only directories, network drives, or shared cache locations.
+
+```bash
+export GLANCE_CACHE_DIR="$HOME/.cache/glance"
+```
+
+---
+
 ## [0.3.0]
 
 ### Added
