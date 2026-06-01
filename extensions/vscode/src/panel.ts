@@ -8,6 +8,7 @@ type WebviewMessage =
   | { type: 'search'; query: string; useRegex: boolean }
   | { type: 'count'; query: string; useRegex: boolean; gen: number };
 
+/// Open a file in a new Glance panel (right-click command).
 export async function openFilePanel(
   context: vscode.ExtensionContext,
   daemon: GlanceDaemon,
@@ -29,16 +30,24 @@ export async function openFilePanel(
     vscode.ViewColumn.One,
     {
       enableScripts: true,
-      // retainContextWhenHidden removed — we use vscode.getState()/setState() instead.
-      // This avoids high memory cost for large files while still preserving user state.
       localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')],
     }
   );
 
-  panel.webview.html = buildHtml(panel.webview, context.extensionUri, info);
+  setupPanel(panel.webview, panel, context.extensionUri, daemon, info);
+}
 
-  // Store subscription so it can be properly disposed.
-  const messageSubscription = panel.webview.onDidReceiveMessage(
+/// Wire up a webview (either from createWebviewPanel or CustomEditorProvider).
+export function setupPanel(
+  webview: vscode.Webview,
+  disposable: { onDidDispose: (cb: () => void) => vscode.Disposable },
+  extensionUri: vscode.Uri,
+  daemon: GlanceDaemon,
+  info: OpenedData
+): void {
+  webview.html = buildHtml(webview, extensionUri, info);
+
+  const messageSubscription = webview.onDidReceiveMessage(
     async (msg: WebviewMessage) => {
       try {
         if (msg.type === 'read') {
@@ -48,7 +57,7 @@ export async function openFilePanel(
             limit: msg.limit,
             pretty: msg.pretty,
           });
-          panel.webview.postMessage({ type: 'lines', ...data });
+          webview.postMessage({ type: 'lines', ...data });
 
         } else if (msg.type === 'search') {
           const data = await daemon.call<SearchResultsData>('search', {
@@ -57,7 +66,7 @@ export async function openFilePanel(
             regex: msg.useRegex,
             max_results: 200,
           });
-          panel.webview.postMessage({ type: 'search_results', ...data });
+          webview.postMessage({ type: 'search_results', ...data });
 
         } else if (msg.type === 'count') {
           const data = await daemon.call<CountData>('count', {
@@ -65,15 +74,15 @@ export async function openFilePanel(
             query: msg.query,
             regex: msg.useRegex,
           });
-          panel.webview.postMessage({ type: 'count_result', count: data.count, gen: msg.gen });
+          webview.postMessage({ type: 'count_result', count: data.count, gen: msg.gen });
         }
       } catch (err: unknown) {
-        panel.webview.postMessage({ type: 'error', message: (err as Error).message });
+        webview.postMessage({ type: 'error', message: (err as Error).message });
       }
     }
   );
 
-  panel.onDidDispose(() => {
+  disposable.onDidDispose(() => {
     messageSubscription.dispose();
     daemon.call('close', { file_id: info.file_id }).catch(() => {});
   });

@@ -23,8 +23,6 @@ const state = {
   savedTotal: 0,
   savedTruncated: false,
   searchGen: 0,
-  // Pending request guard — prevents duplicate in-flight requests
-  pending: false,
   // Expected offset for current read request — stale responses are ignored
   expectedOffset: -1,
 };
@@ -92,7 +90,6 @@ function showToast(msg) {
 // ── Request helpers ───────────────────────────────────────────────────────────
 
 function sendRead(offset, limit, pretty) {
-  state.pending = true;
   state.expectedOffset = offset;
   showLoading();
   vscode.postMessage({ type: 'read', offset, limit, pretty });
@@ -104,7 +101,6 @@ function showLoading() {
 
 function showError(msg) {
   els.lines.innerHTML = '<div id="error-msg">Error: ' + esc(msg) + '</div>';
-  state.pending = false;
 }
 
 // ── Page navigation ───────────────────────────────────────────────────────────
@@ -119,7 +115,7 @@ function loadPage(newOffset) {
   state.savedTotal  = 0;
   state.savedTruncated = false;
   els.search.value  = '';
-  els.search.classList.remove('regex-active');
+  els.search.classList.toggle('regex-active', state.useRegex);
   els.matchCount.textContent  = '';
   els.matchInfo.textContent   = '';
   els.btnMPrev.disabled = true;
@@ -233,7 +229,6 @@ function triggerSearch(q) {
 
 window.addEventListener('message', function(e) {
   const msg = e.data;
-  state.pending = false;
 
   if (msg.type === 'lines') {
     renderLines(msg.lines, msg.offset, msg.total_lines);
@@ -253,7 +248,6 @@ window.addEventListener('message', function(e) {
 function renderLines(lines, off, total) {
   // Ignore stale responses — user navigated to a different location before this arrived
   if (state.expectedOffset >= 0 && off !== state.expectedOffset) { return; }
-  state.pending = false;
   currentLines = lines;
   // Sync offset from server response (ensures goto/jumpToMatch keep state correct)
   if (!state.isSearching) { state.offset = off; }
