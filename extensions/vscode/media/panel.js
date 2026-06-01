@@ -316,7 +316,11 @@ function renderSearch(results, totalFound, truncated) {
   state.savedTruncated = truncated;
   state.matchIdx       = -1;
   state.focusedLine    = -1;
-  currentLines = results.map(function(r) { return { number: r.line_number, content: r.content }; });
+  currentLines = results.map(function(r) {
+    const line = { number: r.line_number, content: r.content };
+    if (CFG.isCsv) { line.fields = parseDelimitedLine(r.content, CFG.csvDelimiter || ','); }
+    return line;
+  });
 
   const el = els.lines;
   if (!results.length) {
@@ -330,6 +334,8 @@ function renderSearch(results, totalFound, truncated) {
 
   if (state.usePretty && CFG.isJsonl) {
     el.innerHTML = results.map(renderSearchCard).join('');
+  } else if (CFG.isCsv) {
+    el.innerHTML = renderCsvSearchTable(results);
   } else {
     el.innerHTML = results.map(function(r, idx) {
       return '<div class="line search-result">' +
@@ -421,6 +427,65 @@ function renderCsvTable(lines) {
     return row + '</tr>';
   }).join('');
   return '<table id="csv-table"><thead>' + headerHtml + '</thead><tbody>' + rowsHtml + '</tbody></table>';
+}
+
+function renderCsvSearchTable(results) {
+  const delimiter = CFG.csvDelimiter || ',';
+  const lines = results.map(function(r) {
+    return {
+      number: r.line_number,
+      content: r.content,
+      fields: parseDelimitedLine(r.content, delimiter),
+      match: r,
+    };
+  });
+
+  const numCols = lines.reduce(function(max, l) {
+    return Math.max(max, l.fields.length);
+  }, 0);
+
+  let headerHtml = '<tr><th class="row-num">#</th>';
+  for (let i = 0; i < numCols; i++) { headerHtml += '<th>Col ' + (i + 1) + '</th>'; }
+  headerHtml += '</tr>';
+
+  const rowsHtml = lines.map(function(l, idx) {
+    let row = '<tr><td class="row-num" data-idx="' + idx + '" title="Click to view in context">' + (l.number + 1) + '</td>';
+    for (let i = 0; i < numCols; i++) {
+      const field = l.fields[i] || '';
+      row += '<td title="' + esc(field) + '">' + highlightInContent(field, l.match) + '</td>';
+    }
+    return row + '</tr>';
+  }).join('');
+
+  return '<table id="csv-table"><thead>' + headerHtml + '</thead><tbody>' + rowsHtml + '</tbody></table>';
+}
+
+function parseDelimitedLine(line, delimiter) {
+  const fields = [];
+  let field = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"' && inQuotes) {
+      if (line[i + 1] === '"') {
+        i++;
+        field += '"';
+      } else {
+        inQuotes = false;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === delimiter && !inQuotes) {
+      fields.push(field);
+      field = '';
+    } else {
+      field += c;
+    }
+  }
+
+  fields.push(field);
+  return fields;
 }
 
 // ── Event delegation ──────────────────────────────────────────────────────────

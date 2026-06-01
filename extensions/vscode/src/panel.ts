@@ -34,7 +34,7 @@ export async function openFilePanel(
     }
   );
 
-  setupPanel(panel.webview, panel, context.extensionUri, daemon, info);
+  setupPanel(panel.webview, panel, context.extensionUri, daemon, info, uri.fsPath);
 }
 
 /// Wire up a webview (either from createWebviewPanel or CustomEditorProvider).
@@ -43,9 +43,10 @@ export function setupPanel(
   disposable: { onDidDispose: (cb: () => void) => vscode.Disposable },
   extensionUri: vscode.Uri,
   daemon: GlanceDaemon,
-  info: OpenedData
+  info: OpenedData,
+  sourcePath: string
 ): void {
-  webview.html = buildHtml(webview, extensionUri, info);
+  webview.html = buildHtml(webview, extensionUri, info, sourcePath);
 
   const messageSubscription = webview.onDidReceiveMessage(
     async (msg: WebviewMessage) => {
@@ -96,7 +97,8 @@ function getNonce(): string {
 function buildHtml(
   webview: vscode.Webview,
   extensionUri: vscode.Uri,
-  info: OpenedData
+  info: OpenedData,
+  sourcePath: string
 ): string {
   const nonce = getNonce();
   const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'panel.css'));
@@ -110,6 +112,7 @@ function buildHtml(
     format: info.format,
     isJsonl: info.format === 'jsonl',
     isCsv: info.format === 'csv',
+    csvDelimiter: path.extname(sourcePath).toLowerCase() === '.tsv' ? '\t' : ',',
   });
 
   return `<!DOCTYPE html>
