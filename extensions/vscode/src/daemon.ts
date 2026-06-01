@@ -94,6 +94,7 @@ export class GlanceDaemon {
 
   dispose() {
     this.alive = false;
+    this.rl.close();
     this.proc.kill();
   }
 }

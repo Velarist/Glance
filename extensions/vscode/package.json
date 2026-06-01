@@ -16,10 +16,29 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:glance.openFile"
+    "onCustomEditor:glance.fileViewer"
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "customEditors": [
+      {
+        "viewType": "glance.fileViewer",
+        "displayName": "Glance Large File Viewer",
+        "selector": [
+          { "filenamePattern": "*.jsonl" },
+          { "filenamePattern": "*.ndjson" },
+          { "filenamePattern": "*.ldjson" },
+          { "filenamePattern": "*.csv" },
+          { "filenamePattern": "*.tsv" },
+          { "filenamePattern": "*.log" },
+          { "filenamePattern": "*.sql" },
+          { "filenamePattern": "*.txt" },
+          { "filenamePattern": "*.xml" },
+          { "filenamePattern": "*.out" }
+        ],
+        "priority": "default"
+      }
+    ],
     "commands": [
       {
         "command": "glance.openFile",
@@ -30,7 +49,7 @@
       "explorer/context": [
         {
           "command": "glance.openFile",
-          "when": "resourceExtname =~ /\\.(jsonl|ndjson|csv|tsv|log)$/"
+          "when": "resourceExtname =~ /\\.(jsonl|ndjson|ldjson|csv|tsv|log|sql|txt|xml|out)$/"
         }
       ]
     }
