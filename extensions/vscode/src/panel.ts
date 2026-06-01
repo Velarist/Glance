@@ -8,6 +8,7 @@ type WebviewMessage =
   | { type: 'search'; query: string; useRegex: boolean }
   | { type: 'count'; query: string; useRegex: boolean; gen: number };
 
+/// Open a file in a new Glance panel (right-click command).
 export async function openFilePanel(
   context: vscode.ExtensionContext,
   daemon: GlanceDaemon,
@@ -29,47 +30,60 @@ export async function openFilePanel(
     vscode.ViewColumn.One,
     {
       enableScripts: true,
-      retainContextWhenHidden: true,
       localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')],
     }
   );
 
-  panel.webview.html = buildHtml(panel.webview, context.extensionUri, info);
+  setupPanel(panel.webview, panel, context.extensionUri, daemon, info);
+}
 
-  panel.webview.onDidReceiveMessage(async (msg: WebviewMessage) => {
-    try {
-      if (msg.type === 'read') {
-        const data = await daemon.call<LinesData>('read', {
-          file_id: info.file_id,
-          offset: msg.offset,
-          limit: msg.limit,
-          pretty: msg.pretty,
-        });
-        panel.webview.postMessage({ type: 'lines', ...data });
+/// Wire up a webview (either from createWebviewPanel or CustomEditorProvider).
+export function setupPanel(
+  webview: vscode.Webview,
+  disposable: { onDidDispose: (cb: () => void) => vscode.Disposable },
+  extensionUri: vscode.Uri,
+  daemon: GlanceDaemon,
+  info: OpenedData
+): void {
+  webview.html = buildHtml(webview, extensionUri, info);
 
-      } else if (msg.type === 'search') {
-        const data = await daemon.call<SearchResultsData>('search', {
-          file_id: info.file_id,
-          query: msg.query,
-          regex: msg.useRegex,
-          max_results: 200,
-        });
-        panel.webview.postMessage({ type: 'search_results', ...data });
+  const messageSubscription = webview.onDidReceiveMessage(
+    async (msg: WebviewMessage) => {
+      try {
+        if (msg.type === 'read') {
+          const data = await daemon.call<LinesData>('read', {
+            file_id: info.file_id,
+            offset: msg.offset,
+            limit: msg.limit,
+            pretty: msg.pretty,
+          });
+          webview.postMessage({ type: 'lines', ...data });
 
-      } else if (msg.type === 'count') {
-        const data = await daemon.call<CountData>('count', {
-          file_id: info.file_id,
-          query: msg.query,
-          regex: msg.useRegex,
-        });
-        panel.webview.postMessage({ type: 'count_result', count: data.count, gen: msg.gen });
+        } else if (msg.type === 'search') {
+          const data = await daemon.call<SearchResultsData>('search', {
+            file_id: info.file_id,
+            query: msg.query,
+            regex: msg.useRegex,
+            max_results: 200,
+          });
+          webview.postMessage({ type: 'search_results', ...data });
+
+        } else if (msg.type === 'count') {
+          const data = await daemon.call<CountData>('count', {
+            file_id: info.file_id,
+            query: msg.query,
+            regex: msg.useRegex,
+          });
+          webview.postMessage({ type: 'count_result', count: data.count, gen: msg.gen });
+        }
+      } catch (err: unknown) {
+        webview.postMessage({ type: 'error', message: (err as Error).message });
       }
-    } catch (err: unknown) {
-      panel.webview.postMessage({ type: 'error', message: (err as Error).message });
     }
-  });
+  );
 
-  panel.onDidDispose(() => {
+  disposable.onDidDispose(() => {
+    messageSubscription.dispose();
     daemon.call('close', { file_id: info.file_id }).catch(() => {});
   });
 }
@@ -87,7 +101,6 @@ function buildHtml(
   const nonce = getNonce();
   const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'panel.css'));
 
-  // Read panel.js from disk and inject inline — avoids external script CSP issues.
   const jsPath = path.join(extensionUri.fsPath, 'media', 'panel.js');
   const jsContent = fs.readFileSync(jsPath, 'utf8');
 
