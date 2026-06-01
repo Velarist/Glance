@@ -24,6 +24,10 @@ pub struct SearchParams {
     /// If true, `query` is treated as a regex pattern (case-sensitive).
     /// If false or omitted, plain case-insensitive substring match is used.
     pub regex: Option<bool>,
+    /// Number of lines to include before each match.
+    pub before: Option<usize>,
+    /// Number of lines to include after each match.
+    pub after: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]

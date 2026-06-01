@@ -48,6 +48,12 @@ enum Command {
         /// Maximum number of results to show
         #[arg(long, default_value_t = 50)]
         max: usize,
+        /// Lines of context before each match
+        #[arg(long, default_value_t = 0)]
+        before: usize,
+        /// Lines of context after each match
+        #[arg(long, default_value_t = 0)]
+        after: usize,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -98,8 +104,8 @@ async fn main() -> Result<()> {
         Some(Command::Read { path, offset, limit, pretty, json }) =>
             glance::cli::read::run(&path, offset, limit, pretty, Format::from_flag(json)),
 
-        Some(Command::Search { path, query, regex, max, json }) =>
-            glance::cli::search::run(&path, &query, regex, max, Format::from_flag(json)),
+        Some(Command::Search { path, query, regex, max, before, after, json }) =>
+            glance::cli::search::run(&path, &query, regex, max, before, after, Format::from_flag(json)),
 
         Some(Command::Count { path, query, regex, json }) =>
             glance::cli::count::run(&path, &query, regex, Format::from_flag(json)),

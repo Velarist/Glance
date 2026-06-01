@@ -31,12 +31,22 @@ pub struct SearchResultsData {
     pub truncated: bool,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct ContextLine {
+    pub line_number: u64,
+    pub content: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SearchResult {
     pub line_number: u64,
     pub content: String,
     pub match_start: usize,
     pub match_end: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub context_before: Vec<ContextLine>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub context_after: Vec<ContextLine>,
 }
 
 #[derive(Debug, Serialize)]

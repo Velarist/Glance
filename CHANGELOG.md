@@ -2,6 +2,16 @@
 
 ---
 
+## [0.3.0]
+
+### Added
+- Context lines for search — `--before N` and `--after N` in CLI, `"before"`/`"after"` in JSON-RPC
+- `FileHandle.search_with_context` — uses line index for O(1) seeks when fetching context
+- Match line marked with `▶` in CLI output, separator `─────` between match groups
+- `context_before` and `context_after` fields in `SearchResult` (omitted from JSON when empty)
+
+---
+
 ## [0.2.1]
 
 ### Fixed

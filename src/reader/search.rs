@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 use crate::protocol::response::SearchResult;
+pub use crate::protocol::response::ContextLine;
 
 /// Case-insensitive substring search. Streams the file line-by-line.
 /// Returns (results, truncated). `truncated` is true when cut short at max_results.
@@ -20,8 +21,6 @@ pub fn search(path: &str, query: &str, max_results: usize) -> Result<(Vec<Search
         let line = line?;
         let line_lower = line.to_lowercase();
         if let Some(byte_pos) = line_lower.find(&query_lower) {
-            // Use line_lower for slicing — lowercasing can change byte lengths for some
-            // Unicode chars (e.g. ẞ → ß), so byte_pos is only valid in line_lower.
             let char_start = line_lower[..byte_pos].chars().count();
             let char_end = char_start + line_lower[byte_pos..byte_pos + query_lower.len()].chars().count();
             results.push(SearchResult {
@@ -29,6 +28,8 @@ pub fn search(path: &str, query: &str, max_results: usize) -> Result<(Vec<Search
                 content: line,
                 match_start: char_start,
                 match_end: char_end,
+                context_before: vec![],
+                context_after: vec![],
             });
             if results.len() >= max_results {
                 return Ok((results, true));
@@ -40,7 +41,6 @@ pub fn search(path: &str, query: &str, max_results: usize) -> Result<(Vec<Search
 }
 
 /// Regex search. Compiles the pattern once, streams the file.
-/// Returns an error immediately if the pattern is invalid.
 pub fn search_regex(path: &str, pattern: &str, max_results: usize) -> Result<(Vec<SearchResult>, bool)> {
     let re = Regex::new(pattern)
         .map_err(|e| anyhow::anyhow!("invalid regex: {e}"))?;
@@ -59,6 +59,8 @@ pub fn search_regex(path: &str, pattern: &str, max_results: usize) -> Result<(Ve
                 content: line,
                 match_start: char_start,
                 match_end: char_end,
+                context_before: vec![],
+                context_after: vec![],
             });
             if results.len() >= max_results {
                 return Ok((results, true));
@@ -67,6 +69,43 @@ pub fn search_regex(path: &str, pattern: &str, max_results: usize) -> Result<(Ve
     }
 
     Ok((results, false))
+}
+
+/// Fetch context lines around a match using a pre-built line index.
+/// Reads `before` lines before and `after` lines after `match_line`.
+pub fn fetch_context(
+    path: &str,
+    index: &crate::index::line_index::LineIndex,
+    match_line: u64,
+    before: usize,
+    after: usize,
+) -> Result<(Vec<ContextLine>, Vec<ContextLine>)> {
+    use crate::reader::stream::read_lines_direct;
+    use crate::reader::format::FileFormat;
+
+    let total = index.total_lines();
+
+    // context_before
+    let before_start = match_line.saturating_sub(before as u64);
+    let ctx_before = if before > 0 && before_start < match_line {
+        let byte_off = index.line_offset(before_start).unwrap_or(0);
+        let lines = read_lines_direct(path, byte_off, before_start, match_line, false, FileFormat::Raw)?;
+        lines.into_iter().map(|l| ContextLine { line_number: l.number, content: l.content }).collect()
+    } else {
+        vec![]
+    };
+
+    // context_after
+    let after_end = (match_line + 1 + after as u64).min(total);
+    let ctx_after = if after > 0 && match_line + 1 < total {
+        let byte_off = index.line_offset(match_line + 1).unwrap_or(0);
+        let lines = read_lines_direct(path, byte_off, match_line + 1, after_end, false, FileFormat::Raw)?;
+        lines.into_iter().map(|l| ContextLine { line_number: l.number, content: l.content }).collect()
+    } else {
+        vec![]
+    };
+
+    Ok((ctx_before, ctx_after))
 }
 
 /// Count matching lines — O(1) memory regardless of file size.
