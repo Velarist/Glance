@@ -8,6 +8,7 @@ const THRESHOLD_MB = 25;
 const THRESHOLD    = THRESHOLD_MB * 1024 * 1024;
 
 let daemon: GlanceDaemon | undefined;
+const forcedOpenPaths = new Set<string>();
 
 export function activate(context: vscode.ExtensionContext) {
   const binaryName = process.platform === 'win32' ? 'glance.exe' : 'glance';
@@ -38,6 +39,9 @@ export function activate(context: vscode.ExtensionContext) {
         if (!picked?.[0]) { return; }
         uri = picked[0];
       }
+      const forceKey = uri.fsPath;
+      forcedOpenPaths.add(forceKey);
+      setTimeout(() => forcedOpenPaths.delete(forceKey), 10_000);
       await vscode.commands.executeCommand('vscode.openWith', uri, 'glance.fileViewer');
     })
   );
@@ -76,7 +80,9 @@ class GlanceEditorProvider implements vscode.CustomReadonlyEditorProvider<Glance
       fileSize = stat.size;
     } catch (_) { /* unknown size — proceed with Glance */ }
 
-    if (fileSize > 0 && fileSize < THRESHOLD) {
+    const forceOpen = forcedOpenPaths.delete(document.uri.fsPath);
+
+    if (!forceOpen && fileSize > 0 && fileSize < THRESHOLD) {
       // Small file — dispose this panel and open with VS Code text editor instead.
       // setTimeout gives VS Code a tick to finish registering the panel before disposing.
       setTimeout(() => {
@@ -101,7 +107,7 @@ class GlanceEditorProvider implements vscode.CustomReadonlyEditorProvider<Glance
       return;
     }
 
-    setupPanel(webviewPanel.webview, webviewPanel, this.context.extensionUri, this.daemon, info);
+    setupPanel(webviewPanel.webview, webviewPanel, this.context.extensionUri, this.daemon, info, document.uri.fsPath);
   }
 }
 
