@@ -2,6 +2,14 @@
 
 ---
 
+## [0.3.4]
+
+### Fixed
+- VS Code extension now renders CSV/TSV search results as a table, matching normal read rendering.
+- Explicit `Glance: Open Large File` commands now open files in Glance even when they are below the automatic 25 MB threshold.
+
+---
+
 ## [0.3.3]
 
 ### Fixed
